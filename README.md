@@ -1,1 +1,0 @@
-# Kursa_darbs

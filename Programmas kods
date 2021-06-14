@@ -1,0 +1,230 @@
+# Kursa_darbs
+//IESTATĪJUMI
+#define WIRING_VERSION 0
+//        Displejs
+#define USE_OLED 1          // Displejs
+#define LCD_BACKL 1         // automātiski atspējot displeja spīdumu (1 - atļaut)
+#define BACKL_TOUT 60       // displeja izslēgšanas taimauts, sekundes
+#define CONTRAST 150        // displeja kontrasts (spilgtums) 0-255
+#define I2C_ADDRESS 0x3C    // displeja adrese
+//        Draiveris
+#define HIGH_FREQUENCY 2    // 31.4 kHz
+#define PWM_FREQUENCY 15000 // ŠIM frekvence, Hz
+#define DRIVER_DIRECTION 0  // mosfetes
+//       Lente
+#define SMOOTH_K 0.25       // uguns laidenības koeficients
+//        Pults
+#define USE_IR 1            //izmantot tālvadības pulti
+#define IR_STEP 10          //vadības pults pielāgošanas solis
+//        Krāsa
+#define MIN_PWM 0           // PWM minimālais signāls
+#define GAMMA_BRIGHT 1      // spilgtuma korekcija
+#define LUT_R 1.0           // LUT sarkanas krāsas koeficients (0.0 - 1.0)
+#define LUT_G 1.0           // LUT zaļās krāsas koeficients (0.0 - 1.0)
+#define LUT_B 1.0           // LUT zilās krāsas koeficients (0.0 - 1.0)
+//PINAS
+#if (WIRING_VERSION == 0)
+// Draiveris
+#define PIN_R 9
+#define PIN_G 10
+#define PIN_B 3
+#define PIN_W 11
+// pults uztvērējs (WAVGAT vai TV)
+#define pinIR 2
+#endif
+// ----- WAVGAT vai TV pogas -----
+#define BUTT_UP     0xF39EEBAD
+#define BUTT_DOWN   0xC089F6AD
+#define BUTT_LEFT   0xE25410AD
+#define BUTT_RIGHT  0x14CE54AD
+#define BUTT_OK     0x297C76AD
+#define BUTT_1      0x4E5BA3AD
+#define BUTT_2      0xE51CA6AD
+#define BUTT_3      0xE207E1AD
+#define BUTT_4      0x517068AD
+#define BUTT_5      0x1B92DDAD
+#define BUTT_6      0xAC2A56AD
+#define BUTT_7      0x5484B6AD
+#define BUTT_8      0xD22353AD
+#define BUTT_9      0xDF3F4BAD
+#define BUTT_0      0xF08A26AD
+#define BUTT_STAR   0x68E456AD
+#define BUTT_HASH   0x151CD6AD
+// EEPROM
+#define EEPR_TIME 10000
+#define EEPR_RESET 1023
+#define RESET_VAL 10
+#define PRESET_ADDR 200
+// Bibliotēkas
+#include <SoftwareSerial.h>
+SoftwareSerial btSerial(BT_TX, BT_RX); // RX, TX
+#include <GyverRGB.h>
+GRGB strip(PIN_R, PIN_G, PIN_B);  // kur ir pievienotas krāsas (R, G, B)
+#include <GyverEncoder.h>
+Encoder enc(CLK, DT, SW);
+#if (USE_OLED == 1)
+#include <Wire.h>
+#include <SSD1306Ascii.h>
+#include <SSD1306AsciiWire.h>
+SSD1306AsciiWire oled;
+#endif
+#include <IRLremote.h>
+CHashIR IRLremote;
+#include <avr/eeprom.h>
+// Mainīgie
+int presetSettings[6];    // pašreizējie preses iestatījumi
+const byte setAmount[] = {5, 4, 3, 3, 3, 4, 4, 5, 5, 5, 3};         // pielāgojumu skaits režīmā
+const byte startFrom[] = {0, 4, 7, 9, 11, 13, 16, 19, 23, 27, 31}; //leibļu saraksta indeksa sākums
+const char *labels[] = {      // leibu nosaukumu saraksts
+  "BR", "R", "G", "B",
+  "HUE", "SAT", "VAL",
+  "BR", "COL",
+  "BR", "COL",
+  "BR", "TEMP",
+  "BR", "SPD", "STP",
+  "BR", "SPD", "MIN",
+  "BR", "COL", "SPD", "MIN",
+  "HUE", "SAT", "VAL", "SPD",
+  "HUE", "SAT", "VAL", "SPD",
+  "BR", "SPD",
+};
+const char *modeNames[] = {    // režīmu nosaukumu saraksts
+  "RGB", "HSV", "Color", "ColorSet", "Kelvin", "ColorW",
+  "Fire", "FireM", "Strobe", "StrobeR", "Police",
+};
+const int maxVals[] = {
+  255, 255, 255, 255,
+  255, 255, 255,
+  255, 1530,
+  255, 15,
+  255, 10000,
+  255, 1000, 500,
+  255, 1000, 255,
+  255, 255, 1000, 255,
+  255, 255, 255, 1000,
+  255, 255, 255, 1000,
+  255, 1000,
+};
+const char *colorNames[] = {
+  "WHITE",
+  "GRAY",
+  "BLACK",
+  "RED",
+  "MAROON",
+  "YELLOW",
+  "LIME",
+  "GREEN",
+  "AQUA",
+  "TEAL",
+  "BLUE",
+  "NAVY",
+  "PINK",
+  "PURPLE",
+};
+const uint32_t colorVals[] = {
+  0xFFFFFF, 0xC0C0C0, 0x808080, 0x000000, 0xFF0000, 0x800000,
+  0xFFFF00, 0x808000, 0x00FF00, 0x008000, 0x00FFFF, 0x008080,
+  0x0000FF, 0x000080, 0xFF00FF, 0x800080,
+};
+uint32_t eeprTimer;
+uint32_t effTimer;
+uint16_t effPeriod;
+boolean eeprFlag;
+int16_t presetNum;        // preses numurs
+int16_t modeNum = 0;     // režīma numurs
+int8_t navPos = 0;      // navigācijas pozīcija
+int invSet = 0;
+boolean invFlag;
+boolean changeFlag;
+boolean settingsChanged;
+boolean ONflag = true;
+uint32_t IRdata;
+boolean toggleFlag;
+float dividerCoef = (float)((R1 + R2) / R2);
+int voltage;
+byte batPerc;
+uint32_t voltmeterTimer;
+boolean backlState = true;
+uint32_t backlTimer;
+boolean btnControl = false;
+int8_t btnColor;
+boolean btnColorChanged = true;
+int thisBright = 255;
+boolean firstStartBtn = false;
+void setup() {
+#if (WIRING_VERSION == 1)
+  pinMode(ENC_GND, OUTPUT);
+  pinMode(ENC_VCC, OUTPUT);
+  digitalWrite(ENC_GND, 0);
+  digitalWrite(ENC_VCC, 1);
+#endif
+  pinMode(PIN_R, OUTPUT);
+  pinMode(PIN_G, OUTPUT);
+  pinMode(PIN_B, OUTPUT);
+  pinMode(PIN_W, OUTPUT);
+  if (USE_BT) btSerial.begin(9600);
+  if (USE_IR) IRLremote.begin(pinIR);
+  randomSeed(analogRead(1));
+#if (USE_BTN == 1)
+  btn.setStepTimeout(150);
+  btn.setClickTimeout(700);
+#endif
+  // LENTE
+  if (HIGH_FREQUENCY == 1) {
+    TCCR1B |= _BV(WGM12);
+    TCCR1B = TCCR1B & 0b11111000 | 0x02;
+    TCCR2A |= _BV(WGM20) | _BV(WGM21);
+    TCCR2B = TCCR2B & 0b11111000 | 0x02;
+  } else if (HIGH_FREQUENCY == 2) {
+    TCCR1B &= ~_BV(WGM12);
+    TCCR1B = TCCR1B & 0b11111000 | 0x01;
+    TCCR2A |= _BV(WGM20);
+    TCCR2B = TCCR2B & 0b11111000 | 0x01;
+  } else if (HIGH_FREQUENCY == 3) {
+    strip.highFrequency(PWM_FREQUENCY);
+  }
+  if (MAX_CURRENT > 0) strip.setMaxCurrent(NUM_LEDS, 12000, MAX_CURRENT);
+  if (DRIVER_DIRECTION) strip.setDirection(REVERSE);
+  if (LUT_R != 1.0 || LUT_G != 1.0 || LUT_B != 1.0) strip.setLUT(LUT_R, LUT_G, LUT_B);
+  if (MIN_PWM > 0) strip.setMinPWM(MIN_PWM);
+  if (GAMMA_BRIGHT) strip.setGammaBright(true);
+  // работаем с EEPROM
+  if (eeprom_read_byte((uint8_t*)EEPR_RESET) != RESET_VAL) {    // pirmā palaišana
+    eeprom_write_byte((uint8_t*)EEPR_RESET, RESET_VAL);         // iegaumēja
+    for (byte i = 0; i < 10; i++) eeprom_write_byte(i, 0);
+    for (byte i = 10; i < 200; i += 2) {
+      eeprom_write_word(i, 0);
+      if (i % 10 == 0) eeprom_write_word(i, 255);
+    }
+    eeprom_write_byte(PRESET_ADDR, 0);
+    eeprom_write_byte(201, 0);
+    eeprom_write_word(202, 100);
+    writeSettings();
+  }
+  presetNum = eeprom_read_byte((uint8_t*)PRESET_ADDR);
+  btnColor = eeprom_read_byte((uint8_t*)201);
+  thisBright = eeprom_read_word((uint16_t*)202);
+  readSettings();
+  delay(100);
+#if (USE_OLED == 1)
+  Wire.begin();
+  Wire.setClock(400000L);
+  oled.begin(&Adafruit128x32, I2C_ADDRESS);
+  oled.setContrast(CONTRAST);
+  if (ROTATE_DISP) {
+    oled.ssd1306WriteCmd(SSD1306_SEGREMAP);
+    oled.ssd1306WriteCmd(SSD1306_COMSCANINC);
+  }
+  oled.clear();
+  //displeja fonts
+  oled.setFont(Adafruit5x7);
+#endif
+  settingsChanged = true;
+  drawInfo();
+  drawSettings();
+}
+void loop() {
+  backlTick();      // displeja izslēgšana
+  controlTick();    // vadības atstrāde
+  effectsTick();    // rādīt režīmus
+}
